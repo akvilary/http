@@ -44,7 +44,7 @@ extension Response where B == Body {
     @inlinable
     public init(
         status: StatusCode = .ok,
-        body: Body = Body()
+        body: Body = .empty
     ) {
         self.init(status: status, version: .http11,
                   headers: HeaderMap(), body: body,
@@ -56,13 +56,26 @@ extension Response where B == Body {
         var headers = HeaderMap()
         headers.insert(.contentType, "text/plain; charset=utf-8")
         headers.insert(.contentLength, String(body.utf8.count))
-        return Response(status: status, headers: headers, body: Body(body))
+        return Response(status: status, headers: headers, body: .buffered(Array(body.utf8)))
     }
 
     /// Standard 200 OK with a raw byte body.
     public static func bytes(_ bytes: [UInt8], status: StatusCode = .ok) -> Response<Body> {
         var headers = HeaderMap()
         headers.insert(.contentLength, String(bytes.count))
-        return Response(status: status, headers: headers, body: Body(bytes))
+        return Response(status: status, headers: headers, body: .buffered(bytes))
+    }
+
+    /// 200 OK with a streaming body. Sets `Transfer-Encoding: chunked`
+    /// automatically — the encoder handles the chunk framing.
+    public static func stream(
+        _ stream: any AsyncSequence<[UInt8], Error> & Sendable,
+        status: StatusCode = .ok,
+        contentType: String = "text/plain; charset=utf-8"
+    ) -> Response<Body> {
+        var headers = HeaderMap()
+        headers.insert(.contentType, contentType)
+        headers.insert(.transferEncoding, "chunked")
+        return Response(status: status, headers: headers, body: .stream(stream))
     }
 }
