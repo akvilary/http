@@ -82,6 +82,13 @@ public struct Extensions: @unchecked Sendable {
 
     @inlinable public init() {}
 
+    /// Clear all stored values, preserving backing storage capacity.
+    /// Used by the codec to reuse the Extensions object across
+    /// keep-alive requests — avoids Dictionary re-allocation.
+    @inlinable public mutating func removeAll() {
+        storage.removeAll(keepingCapacity: true)
+    }
+
     /// Insert `value` for its dynamic type, replacing any prior.
     @inlinable
     public mutating func insert<T: Hashable & Sendable>(_ value: T) {
