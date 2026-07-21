@@ -16,7 +16,10 @@ import Foundation
 /// the comparison fast path; the canonical form is materialised
 /// on demand via `description`.
 public struct HeaderName: Sendable, Hashable, CustomStringConvertible {
-    @usableFromInline internal let bytes: [UInt8]
+    /// Lowercased ASCII bytes. Public so the codec (in a separate
+    /// module) can serialise without going through `description`
+    /// (which would allocate a `String`).
+    public let bytes: [UInt8]
 
     @inlinable
     public init(_ name: String) {
@@ -110,10 +113,13 @@ public struct HeaderValue: Sendable, Hashable, CustomStringConvertible {
 /// `HeaderMap`). Multiple values per name are supported — important
 /// for `Set-Cookie` and `Cache-Control`.
 public struct HeaderMap: Sendable {
-    /// Backing storage: array of `(name, value)` pairs in insertion
+    /// Backing storage: array of `(HeaderName, HeaderValue)` pairs in insertion
     /// order. Linear scan on lookup is faster than `Dictionary` for
     /// typical HTTP header counts (3-12 headers/request).
-    @usableFromInline internal var entries: [(HeaderName, HeaderValue)] = []
+    ///
+    /// Public so the codec (in a separate module) can iterate when
+    /// serialising — mirrors `http::HeaderMap::iter()`.
+    public var entries: [(HeaderName, HeaderValue)] = []
 
     @inlinable public init() {}
 
