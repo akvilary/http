@@ -16,8 +16,8 @@
 //       a streaming file body, etc.). The trait's poll_frame method
 //       becomes `nextFrame() async throws -> Frame?` in Swift.
 //
-//    3. `Body` — the concrete enum used in `Request<Body>` and
-//       `Response<Body>`. Direct port of `axum::body::Body`. Three
+//    3. `Body` — the concrete enum used in `Request` and
+//       `Response`. Direct port of `axum::body::Body`. Three
 //       cases cover the entire API surface of axum's Body:
 //
 //         .empty              ≡ Body::empty()
@@ -112,7 +112,7 @@ public extension BodyProtocol {
 
 // MARK: - Body (concrete enum)
 
-/// The body type used in `Request<Body>` and `Response<Body>`.
+/// The body type used in `Request` and `Response`.
 ///
 /// Direct port of `axum::body::Body`. Three cases cover the entire
 /// API surface:

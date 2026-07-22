@@ -6,9 +6,10 @@
 //  `HeaderMap`, `Method`, `StatusCode`, `Uri`, `Version`. No I/O, no
 //  async — just the typed view of an HTTP message on the wire.
 //
-//  Direct 1:1 port of https://docs.rs/http — same types, same
-//  semantics, same case-insensitive HeaderMap, same generic-over-body
-//  Request<B> / Response<B>.
+//  Direct 1:1 port of https://docs.rs — same types, same
+//  semantics, same case-insensitive HeaderMap. Unlike the Rust
+//  crate, `Request` and `Response` are not generic over body —
+//  the concrete `Body` enum covers all representations.
 //
 //  This is the foundation crate for the whole axum/hyper/tower
 //  ecosystem in Rust, and the same role here: hyper depends on it

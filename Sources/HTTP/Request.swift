@@ -3,25 +3,25 @@
 //  Request.swift
 //  StarlightHTTP
 //
-//  HTTP request — direct port of `http::Request<B>`.
+//  HTTP request.
 //
 //===----------------------------------------------------------------------===//
 
 import Foundation
 
-/// HTTP request, parameterised over the body type.
+/// HTTP request.
 ///
-/// axum/hyper's `Request<B>` is generic over body so that the codec
-/// can stream chunks (`Request<StreamBody>`) while the framework
-/// exposes a fixed-buffer body (`Request<Body>`). We mirror that
-/// here: handlers see `Request<Body>`, the codec internally may use
-/// a streaming body type.
-public struct Request<B: Sendable>: Sendable {
+/// `body` is the concrete `Body` enum — the same type the codec
+/// produces and handlers consume. Unlike Rust's `http::Request<B>`,
+/// Swift's `Body` enum already covers all body representations
+/// (empty / buffered / stream), so there's no need to parameterise
+/// over the body type.
+public struct Request: Sendable {
     public var method: Method
     public var uri: Uri
     public var version: Version
     public var headers: HeaderMap
-    public var body: B
+    public var body: Body
     /// Extension map — axum's `Request::extensions_mut` analogue.
     /// Used to thread per-request state (matched route id, client
     /// IP, etc.) between middleware and handlers without growing
@@ -34,7 +34,7 @@ public struct Request<B: Sendable>: Sendable {
         uri: Uri = Uri("/"),
         version: Version = .http11,
         headers: HeaderMap = HeaderMap(),
-        body: B,
+        body: Body = Body(),
         extensions: Extensions = Extensions()
     ) {
         self.method = method
@@ -44,12 +44,7 @@ public struct Request<B: Sendable>: Sendable {
         self.body = body
         self.extensions = extensions
     }
-}
 
-/// Concrete alias — what handlers see.
-public typealias IncomingRequest = Request<Body>
-
-extension Request where B == Body {
     /// Convenience initialiser with an empty body.
     @inlinable
     public init(
@@ -69,6 +64,11 @@ extension Request where B == Body {
 /// each type may have at most one value. Common uses in axum:
 /// matched `RouteId`, captured `MatchedPath`, custom middleware
 /// state (correlation IDs, auth principal, etc.).
+///
+/// `@unchecked Sendable` is required because `AnyHashable` is not
+/// `Sendable` in Swift 6.2 (it erases the type, so the compiler
+/// can't prove the wrapped value is Sendable). We guarantee safety
+/// by only accepting `T: Hashable & Sendable` in `insert`.
 public struct Extensions: @unchecked Sendable {
     @usableFromInline
     internal struct Box: @unchecked Sendable {
