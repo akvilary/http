@@ -211,8 +211,13 @@ public enum Body: Sendable {
         case .stream(let s):
             var result: [UInt8] = []
             for try await chunk in s {
+                // Check BEFORE appending — a single oversized chunk
+                // must not trigger a multi-GB allocation before the
+                // limit fires.
+                if result.count + chunk.count > maxBytes {
+                    throw BodyError.limitExceeded
+                }
                 result.append(contentsOf: chunk)
-                if result.count > maxBytes { throw BodyError.limitExceeded }
             }
             return result
         }
