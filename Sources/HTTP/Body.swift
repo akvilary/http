@@ -3,112 +3,18 @@
 //  Body.swift
 //  HTTP
 //
-//  Port of `axum::body::Body` + `http_body::Body` + `http_body::Frame`.
+//  Port of `axum::body::Body`.
 //
-//  Three layers, matching Rust's structure:
+//  `Body` is the concrete enum used in `Request` and `Response`.
+//  Three cases cover the entire API surface of axum's Body:
 //
-//    1. `Frame<Data>` — a single frame in a body stream. Either a data
-//       chunk or trailers (sent after the final data frame).
-//       Direct port of `http_body::Frame<T>`.
-//
-//    2. `BodyProtocol` — the trait equivalent of `http_body::Body`.
-//       Conform to write custom body types (e.g. hyper's `Incoming`,
-//       a streaming file body, etc.). The trait's poll_frame method
-//       becomes `nextFrame() async throws -> Frame?` in Swift.
-//
-//    3. `Body` — the concrete enum used in `Request` and
-//       `Response`. Direct port of `axum::body::Body`. Three
-//       cases cover the entire API surface of axum's Body:
-//
-//         .empty              ≡ Body::empty()
-//         .buffered([UInt8])  ≡ Body::from(Vec<u8>) / Body::from(Bytes)
-//         .stream(AsyncSeq)   ≡ Body::from_stream(s)
-//
-//  Body conforms to BodyProtocol so it can be used wherever a generic
-//  body type is expected. Custom body types conform to BodyProtocol
-//  and can be wrapped via `Body.from(body)`.
+//    .empty              ≡ Body::empty()
+//    .buffered([UInt8])  ≡ Body::from(Vec<u8>) / Body::from(Bytes)
+//    .stream(AsyncSeq)   ≡ Body::from_stream(s)
 //
 //===----------------------------------------------------------------------===//
 
 import Foundation
-
-/// A single frame in a body stream.
-///
-/// Direct port of `http_body::Frame<T>`. Either a data chunk or
-/// optional trailers sent after the final data frame.
-public enum Frame<Data: Sendable>: Sendable {
-    /// Body data chunk.
-    case data(Data)
-    /// Trailers — optional headers sent after the final data frame
-    /// (only valid with chunked Transfer-Encoding or HTTP/2).
-    case trailers(HeaderMap)
-}
-
-/// A size hint for a body — port of `http_body::SizeHint`.
-///
-/// Lets the codec decide whether to use Content-Length (known size)
-/// or chunked Transfer-Encoding (unknown size) when encoding a
-/// response body.
-public struct SizeHint: Sendable, Equatable {
-    /// Lower bound on the body size. Always known.
-    public var lower: UInt64
-    /// Upper bound on the body size. `nil` means unbounded.
-    public var upper: UInt64?
-
-    @inlinable public init(lower: UInt64 = 0, upper: UInt64? = nil) {
-        self.lower = lower
-        self.upper = upper
-    }
-
-    /// `true` if the exact size is known — equivalent to
-    /// `lower == upper` (with upper non-nil).
-    @inlinable public var isExact: Bool { upper == lower }
-
-    public static let unknown = SizeHint()
-}
-
-/// The trait equivalent of `http_body::Body`.
-///
-/// Conform to write a custom body type. The trait's `poll_frame`
-/// method becomes `nextFrame() async throws -> Frame<[UInt8]>?`:
-///
-/// ```swift
-/// struct FileBody: BodyProtocol {
-///     let fd: CInt
-///     func nextFrame() async throws -> Frame<[UInt8]>? {
-///         // Read next chunk from fd, return nil on EOF
-///     }
-/// }
-/// ```
-///
-/// `BodyProtocol` is `Sendable` because body instances cross actor
-/// boundaries (handler → codec → transport).
-public protocol BodyProtocol: Sendable {
-    /// Pull the next frame. Returns `nil` when the body is fully
-    /// consumed. Throws on I/O error.
-    ///
-    /// Direct port of `http_body::Body::poll_frame`.
-    func nextFrame() async throws -> Frame<[UInt8]>?
-
-    /// `true` if the body has no more frames to deliver. The codec
-    /// uses this as a fast path to skip unnecessary polling.
-    ///
-    /// Direct port of `http_body::Body::is_end_stream`.
-    var isEndStream: Bool { get }
-
-    /// Best-effort size hint. Used by the encoder to choose between
-    /// `Content-Length` (exact) and `chunked` (unknown) framing.
-    ///
-    /// Direct port of `http_body::Body::size_hint`.
-    var sizeHint: SizeHint { get }
-}
-
-/// Default implementations — body types that don't have a meaningful
-/// size hint or end-stream fast path can omit them.
-public extension BodyProtocol {
-    var isEndStream: Bool { false }
-    var sizeHint: SizeHint { .unknown }
-}
 
 // MARK: - Body (concrete enum)
 
@@ -255,51 +161,6 @@ public enum Body: Sendable {
                 }
                 cont.onTermination = { _ in task.cancel() }
             }
-        }
-    }
-}
-
-// MARK: - BodyProtocol conformance
-
-extension Body: BodyProtocol {
-    public var isEndStream: Bool {
-        switch self {
-        case .empty: return true
-        case .buffered: return true
-        case .stream: return false
-        }
-    }
-
-    public var sizeHint: SizeHint {
-        switch self {
-        case .empty: return SizeHint(lower: 0, upper: 0)
-        case .buffered(let b):
-            let n = UInt64(b.count)
-            return SizeHint(lower: n, upper: n)
-        case .stream: return .unknown
-        }
-    }
-
-    public func nextFrame() async throws -> Frame<[UInt8]>? {
-        switch self {
-        case .empty:
-            return nil
-        case .buffered(let b):
-            // The buffered case yields one data frame then EOF on
-            // subsequent calls. But Body is an enum (immutable) —
-            // we can't advance state. The contract is: callers use
-            // `dataStream()` or `collect()` for buffered bodies,
-            // not `nextFrame()` in a loop.
-            //
-            // For one-shot framing (which is what hyper's encoder
-            // does for buffered responses), this returns the bytes
-            // and the caller treats it as end-of-stream via isEndStream.
-            if b.isEmpty { return nil }
-            return .data(b)
-        case .stream(let s):
-            // Streams go via dataStream() — direct nextFrame on a
-            // stateless enum can't advance the iterator.
-            return nil
         }
     }
 }
