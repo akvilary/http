@@ -65,16 +65,16 @@ public struct Request: Sendable {
 /// matched `RouteId`, captured `MatchedPath`, custom middleware
 /// state (correlation IDs, auth principal, etc.).
 ///
-/// `@unchecked Sendable` is required because `AnyHashable` is not
-/// `Sendable` in Swift 6.2 (it erases the type, so the compiler
-/// can't prove the wrapped value is Sendable). We guarantee safety
-/// by only accepting `T: Hashable & Sendable` in `insert`.
-public struct Extensions: @unchecked Sendable {
+/// `Sendable` is satisfied structurally: the value box wraps
+/// `any Sendable` (which is itself Sendable), and the Dictionary
+/// `[ObjectIdentifier: Box]` is Sendable when both key and value
+/// are Sendable. No `@unchecked` needed.
+public struct Extensions: Sendable {
     @usableFromInline
-    internal struct Box: @unchecked Sendable {
-        @usableFromInline internal let value: AnyHashable
+    internal struct Box: Sendable {
+        @usableFromInline internal let value: any Sendable
 
-        @inlinable internal init(value: AnyHashable) { self.value = value }
+        @inlinable internal init(_ value: any Sendable) { self.value = value }
     }
 
     @usableFromInline
@@ -91,22 +91,22 @@ public struct Extensions: @unchecked Sendable {
 
     /// Insert `value` for its dynamic type, replacing any prior.
     @inlinable
-    public mutating func insert<T: Hashable & Sendable>(_ value: T) {
-        storage[ObjectIdentifier(T.self)] = Box(value: AnyHashable(value))
+    public mutating func insert<T: Sendable>(_ value: T) {
+        storage[ObjectIdentifier(T.self)] = Box(value)
     }
 
     /// Get the value for type `T`, if any.
     @inlinable
-    public func get<T: Hashable & Sendable>(_ type: T.Type = T.self) -> T? {
-        storage[ObjectIdentifier(type)]?.value.base as? T
+    public func get<T: Sendable>(_ type: T.Type = T.self) -> T? {
+        storage[ObjectIdentifier(type)]?.value as? T
     }
 
     /// Remove the value for type `T`.
     @discardableResult
     @inlinable
-    public mutating func remove<T: Hashable & Sendable>(_ type: T.Type = T.self) -> T? {
+    public mutating func remove<T: Sendable>(_ type: T.Type = T.self) -> T? {
         if let removed = storage.removeValue(forKey: ObjectIdentifier(type)) {
-            return removed.value.base as? T
+            return removed.value as? T
         }
         return nil
     }
