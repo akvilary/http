@@ -67,6 +67,27 @@ extension HeaderName {
     public static let setCookie       = HeaderName("set-cookie")
     public static let transferEncoding = HeaderName("transfer-encoding")
     public static let userAgent       = HeaderName("user-agent")
+
+    /// Hop-by-hop headers (RFC 9110 §7.6.1). These are per-connection
+    /// and must not be forwarded to handlers or proxied to clients.
+    public static let keepAlive        = HeaderName("keep-alive")
+    public static let te               = HeaderName("te")
+    public static let trailer          = HeaderName("trailer")
+    public static let upgrade          = HeaderName("upgrade")
+    public static let proxyConnection  = HeaderName("proxy-connection")
+
+    /// `true` if this header name is hop-by-hop (RFC 9110 §7.6.1).
+    /// These headers must be stripped after parsing and before encoding.
+    @inlinable
+    public func isHopByHop() -> Bool {
+        switch self {
+        case .connection, .keepAlive, .te, .trailer,
+             .transferEncoding, .upgrade, .proxyConnection:
+            return true
+        default:
+            return false
+        }
+    }
 }
 
 /// HTTP header value (the bytes after the `:`).
