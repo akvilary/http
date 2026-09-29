@@ -30,7 +30,7 @@ Early. Currently used by:
 
 ```swift
 .target(name: "YourTarget", dependencies: [
-    .product(name: "HTTP", package: "http-model"),
+    .product(name: "HTTPModel", package: "http-model"),
 ])
 ```
 

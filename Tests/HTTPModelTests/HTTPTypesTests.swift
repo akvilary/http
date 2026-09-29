@@ -6,7 +6,7 @@
 //===----------------------------------------------------------------------===//
 
 import Testing
-import HTTP
+import HTTPModel
 
 @Suite("HTTP value types")
 struct HTTPTypesTests {

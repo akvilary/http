@@ -21,18 +21,18 @@ import PackageDescription
 let package = Package(
     name: "http-model",
     products: [
-        .library(name: "HTTP", targets: ["HTTP"]),
+        .library(name: "HTTPModel", targets: ["HTTPModel"]),
     ],
     targets: [
         .target(
-            name: "HTTP",
-            path: "Sources/HTTP",
+            name: "HTTPModel",
+            path: "Sources/HTTPModel",
             swiftSettings: baseSwiftSettings
         ),
         .testTarget(
-            name: "HTTPTests",
-            dependencies: ["HTTP"],
-            path: "Tests/HTTPTests",
+            name: "HTTPModelTests",
+            dependencies: ["HTTPModel"],
+            path: "Tests/HTTPModelTests",
             swiftSettings: baseSwiftSettings
         ),
     ]
