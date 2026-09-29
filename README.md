@@ -25,7 +25,7 @@ Early. Currently used by:
 ## Installation
 
 ```swift
-.package(url: "https://github.com/akvilary/http-model.git", from: "0.3.0")
+.package(url: "https://github.com/akvilary/http-model.git", from: "0.4.0")
 ```
 
 ```swift
