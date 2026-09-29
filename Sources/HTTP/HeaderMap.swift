@@ -9,37 +9,167 @@
 
 import Foundation
 
+
+/// Internal small-byte-string pack/unpack shared by `HeaderName` and
+/// `HeaderValue`: ≤15 bytes pack into two UInt64 lanes + a length —
+/// no heap allocation, dense value storage in `HeaderMap.entries`.
+@usableFromInline
+internal enum SmallAscii {
+
+    @inlinable
+    @inline(__always)
+    static func packInline(_ bytes: [UInt8]) -> (lo: UInt64, hi: UInt64, len: UInt8)? {
+        guard bytes.count <= 15 else { return nil }
+        var lo: UInt64 = 0, hi: UInt64 = 0
+        for (k, b) in bytes.enumerated() {
+            if k < 8 { lo |= UInt64(b) << (8 &* UInt64(k)) }
+            else { hi |= UInt64(b) << (8 &* UInt64(k &- 8)) }
+        }
+        return (lo, hi, UInt8(bytes.count))
+    }
+
+    @inline(__always)
+    static func unpack(_ lo: UInt64, _ hi: UInt64, _ len: UInt8) -> [UInt8] {
+        var out = [UInt8]()
+        out.reserveCapacity(Int(len))
+        for k in 0..<Int(len) {
+            out.append(k < 8
+                ? UInt8(truncatingIfNeeded: lo >> (8 &* UInt64(k)))
+                : UInt8(truncatingIfNeeded: hi >> (8 &* UInt64(k &- 8))))
+        }
+        return out
+    }
+}
+
 /// HTTP header name (e.g. `Content-Type`, `Content-Length`).
 ///
 /// Case-insensitive on comparison, case-preserving on display —
-/// matching RFC 9110 §5.1. Stored as a `[UInt8]` lowercased for
-/// the comparison fast path; the canonical form is materialised
-/// on demand via `description`.
+/// matching RFC 9110 §5.1. Stored lowercased; the canonical form is
+/// materialised on demand via `description`.
+///
+/// Data layout: names of ≤15 bytes (virtually all real-world header
+/// names) live INLINE in the struct — two `UInt64` lanes plus a
+/// length — so parsing a request allocates nothing per header name,
+/// and `HeaderMap.entries` becomes a dense, cache-friendly value
+/// array instead of an array of heap pointers.
 public struct HeaderName: Sendable, Hashable, CustomStringConvertible {
-    /// Lowercased ASCII bytes. Public so the codec (in a separate
-    /// module) can serialise without going through `description`
-    /// (which would allocate a `String`).
-    public let bytes: [UInt8]
+    @usableFromInline
+    internal enum Storage: Hashable, Sendable {
+        /// ≤15 bytes: lane 0 = bytes 0…7, lane 1 = bytes 8…14.
+        case inline(UInt64, UInt64, UInt8)
+        case heap([UInt8])
+    }
+    @usableFromInline internal var storage: Storage
 
     @inlinable
     public init(_ name: String) {
         // Lowercase ASCII for the lookup fast path.
         // (RFC 9110: header names are case-insensitive.)
-        self.bytes = name.utf8.map { b -> UInt8 in
+        let lowered = name.utf8.map { b -> UInt8 in
             if b >= 0x41 && b <= 0x5A { return b + 32 }   // A-Z → a-z
             return b
         }
+        self.storage = Self.makeStorage(lowered)
     }
 
     /// Construct from raw bytes — used by the parser to avoid a
     /// `String` round-trip on the hot path.
     @inlinable
     public init(lowercasedBytes bytes: [UInt8]) {
-        self.bytes = bytes
+        self.storage = Self.makeStorage(bytes)
+    }
+
+    /// Construct from raw buffer bytes, lowercasing ASCII A-Z in
+    /// place while copying into the storage — zero intermediate
+    /// allocation for names that fit inline (the parser's hot path:
+    /// it borrows directly from the connection read buffer).
+    @inlinable
+    public init(lowercasingBuffer bytes: UnsafeBufferPointer<UInt8>) {
+        if bytes.count <= 15 {
+            var lo: UInt64 = 0, hi: UInt64 = 0
+            for (k, b) in bytes.enumerated() {
+                let lower = (b >= 0x41 && b <= 0x5A) ? b &+ 32 : b
+                if k < 8 { lo |= UInt64(lower) << (8 &* UInt64(k)) }
+                else { hi |= UInt64(lower) << (8 &* UInt64(k &- 8)) }
+            }
+            self.storage = .inline(lo, hi, UInt8(bytes.count))
+        } else {
+            var copy = [UInt8]()
+            copy.reserveCapacity(bytes.count)
+            copy.append(contentsOf: bytes.map {
+                ($0 >= 0x41 && $0 <= 0x5A) ? $0 &+ 32 : $0
+            })
+            self.storage = .heap(copy)
+        }
+    }
+
+    @usableFromInline
+    internal static func makeStorage(_ bytes: [UInt8]) -> Storage {
+        if let p = SmallAscii.packInline(bytes) {
+            return .inline(p.lo, p.hi, p.len)
+        }
+        return .heap(bytes)
+    }
+
+    /// Number of bytes in the name — O(1), no materialisation.
+    @inlinable
+    public var byteCount: Int {
+        switch storage {
+        case .inline(_, _, let n): return Int(n)
+        case .heap(let b): return b.count
+        }
+    }
+
+    /// The lowercased bytes, materialised. Prefer `withUnsafeBytes`
+    /// on hot paths — this allocates.
+    public var bytes: [UInt8] {
+        switch storage {
+        case .inline(let lo, let hi, let len):
+            return SmallAscii.unpack(lo, hi, len)
+        case .heap(let b):
+            return b
+        }
+    }
+
+    /// Zero-allocation byte access — inline lanes are unpacked into
+    /// stack storage; heap arrays borrow their buffer.
+    @inlinable
+    public func withUnsafeBytes<R>(
+        _ body: (UnsafeBufferPointer<UInt8>) throws -> R
+    ) rethrows -> R {
+        switch storage {
+        case .inline(let lo, let hi, let len):
+            var lanes = (lo, hi)
+            return try Swift.withUnsafeBytes(of: &lanes) { raw in
+                let full = raw.bindMemory(to: UInt8.self)
+                let view = UnsafeBufferPointer(
+                    start: full.baseAddress, count: Int(len)
+                )
+                return try body(view)
+            }
+        case .heap(let b):
+            return try b.withUnsafeBufferPointer { try body($0) }
+        }
     }
 
     public var description: String {
         String(decoding: bytes, as: UTF8.self)
+    }
+
+    // Hashable / Equatable over byte content.
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(byteCount)
+        withUnsafeBytes { buf in
+            for b in buf { hasher.combine(b) }
+        }
+    }
+
+    public static func == (lhs: HeaderName, rhs: HeaderName) -> Bool {
+        guard lhs.byteCount == rhs.byteCount else { return false }
+        return lhs.withUnsafeBytes { a in
+            rhs.withUnsafeBytes { b in a.elementsEqual(b) }
+        }
     }
 }
 
@@ -96,8 +226,18 @@ extension HeaderName {
 /// do not enforce visibility at the type level (callers may inject
 /// opaque bytes for `Set-Cookie`, `Sec-WebSocket-*`, etc.). The
 /// `String` form is materialised on demand via `description`.
+///
+/// Data layout: values of ≤15 bytes (a large share of real-world
+/// values — `close`, `chunked`, `keep-alive`, short mime types,
+/// numbers) live INLINE — no heap allocation per header value on
+/// the request hot path.
 public struct HeaderValue: Sendable, Hashable, CustomStringConvertible {
-    public let bytes: [UInt8]
+    @usableFromInline
+    internal enum Storage: Hashable, Sendable {
+        case inline(UInt64, UInt64, UInt8)
+        case heap([UInt8])
+    }
+    @usableFromInline internal var storage: Storage
 
     @inlinable
     public init(_ value: String) {
@@ -105,9 +245,6 @@ public struct HeaderValue: Sendable, Hashable, CustomStringConvertible {
         // trimmed by recipients. We do that here so `.host` lookups
         // never see `"  example.com  "`.
         let trimmed = Substring(value).drop(while: { $0.isWhitespace })
-        // Inline trailing-whitespace trim — kept inline (rather than
-        // in a `private extension Substring`) so this `@inlinable`
-        // initialiser can call it across module boundaries.
         var end = trimmed.endIndex
         while end > trimmed.startIndex {
             let prev = trimmed.index(before: end)
@@ -115,16 +252,99 @@ public struct HeaderValue: Sendable, Hashable, CustomStringConvertible {
             end = prev
         }
         let stripped = trimmed[trimmed.startIndex..<end]
-        self.bytes = Array(stripped.utf8)
+        let raw = Array(stripped.utf8)
+        if let p = SmallAscii.packInline(raw) {
+            self.storage = .inline(p.lo, p.hi, p.len)
+        } else {
+            self.storage = .heap(raw)
+        }
     }
 
     @inlinable
     public init(bytes: [UInt8]) {
-        self.bytes = bytes
+        if let p = SmallAscii.packInline(bytes) {
+            self.storage = .inline(p.lo, p.hi, p.len)
+        } else {
+            self.storage = .heap(bytes)
+        }
+    }
+
+    /// Construct by borrowing bytes directly from a parse buffer —
+    /// copies into the storage with zero intermediate allocation for
+    /// values that fit inline (the parser's hot path).
+    @inlinable
+    public init(borrowingBuffer bytes: UnsafeBufferPointer<UInt8>) {
+        if bytes.count <= 15 {
+            var lo: UInt64 = 0, hi: UInt64 = 0
+            for (k, b) in bytes.enumerated() {
+                if k < 8 { lo |= UInt64(b) << (8 &* UInt64(k)) }
+                else { hi |= UInt64(b) << (8 &* UInt64(k &- 8)) }
+            }
+            self.storage = .inline(lo, hi, UInt8(bytes.count))
+        } else {
+            var copy = [UInt8]()
+            copy.reserveCapacity(bytes.count)
+            copy.append(contentsOf: bytes)
+            self.storage = .heap(copy)
+        }
+    }
+
+    /// Number of bytes in the value — O(1), no materialisation.
+    @inlinable
+    public var byteCount: Int {
+        switch storage {
+        case .inline(_, _, let n): return Int(n)
+        case .heap(let b): return b.count
+        }
+    }
+
+    /// The raw bytes, materialised. Prefer `withUnsafeBytes` on hot
+    /// paths — this allocates.
+    public var bytes: [UInt8] {
+        switch storage {
+        case .inline(let lo, let hi, let len):
+            return SmallAscii.unpack(lo, hi, len)
+        case .heap(let b):
+            return b
+        }
+    }
+
+    /// Zero-allocation byte access.
+    @inlinable
+    public func withUnsafeBytes<R>(
+        _ body: (UnsafeBufferPointer<UInt8>) throws -> R
+    ) rethrows -> R {
+        switch storage {
+        case .inline(let lo, let hi, let len):
+            var lanes = (lo, hi)
+            return try Swift.withUnsafeBytes(of: &lanes) { raw in
+                let full = raw.bindMemory(to: UInt8.self)
+                let view = UnsafeBufferPointer(
+                    start: full.baseAddress, count: Int(len)
+                )
+                return try body(view)
+            }
+        case .heap(let b):
+            return try b.withUnsafeBufferPointer { try body($0) }
+        }
     }
 
     public var description: String {
         String(decoding: bytes, as: UTF8.self)
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(byteCount)
+        withUnsafeBytes { buf in
+            for b in buf { hasher.combine(b) }
+        }
+    }
+
+    public static func == (lhs: HeaderValue, rhs: HeaderValue) -> Bool {
+        guard lhs.byteCount == rhs.byteCount else { return false }
+        return lhs.withUnsafeBytes { a in
+            rhs.withUnsafeBytes { b in a.elementsEqual(b) }
+        }
     }
 }
 
