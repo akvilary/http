@@ -159,9 +159,17 @@ public struct HeaderName: Sendable, Hashable, CustomStringConvertible {
     // Hashable / Equatable over byte content.
 
     public func hash(into hasher: inout Hasher) {
+        // Inline storage hashes its two lanes in O(1) (equal values
+        // always share a representation — representation choice is
+        // deterministic by length — so this stays consistent with
+        // ==). Heap storage (long names, rare) hashes per byte.
         hasher.combine(byteCount)
-        withUnsafeBytes { buf in
-            for b in buf { hasher.combine(b) }
+        switch storage {
+        case .inline(let lo, let hi, _):
+            hasher.combine(lo)
+            hasher.combine(hi)
+        case .heap(let b):
+            for byte in b { hasher.combine(byte) }
         }
     }
 
@@ -335,8 +343,12 @@ public struct HeaderValue: Sendable, Hashable, CustomStringConvertible {
 
     public func hash(into hasher: inout Hasher) {
         hasher.combine(byteCount)
-        withUnsafeBytes { buf in
-            for b in buf { hasher.combine(b) }
+        switch storage {
+        case .inline(let lo, let hi, _):
+            hasher.combine(lo)
+            hasher.combine(hi)
+        case .heap(let b):
+            for byte in b { hasher.combine(byte) }
         }
     }
 
