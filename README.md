@@ -25,12 +25,12 @@ Early. Currently used by:
 ## Installation
 
 ```swift
-.package(url: "https://github.com/akvilary/http.git", from: "0.3.0")
+.package(url: "https://github.com/akvilary/http-model.git", from: "0.3.0")
 ```
 
 ```swift
 .target(name: "YourTarget", dependencies: [
-    .product(name: "HTTP", package: "http"),
+    .product(name: "HTTP", package: "http-model"),
 ])
 ```
 

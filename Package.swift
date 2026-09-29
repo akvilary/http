@@ -19,7 +19,7 @@
 import PackageDescription
 
 let package = Package(
-    name: "http",
+    name: "http-model",
     products: [
         .library(name: "HTTP", targets: ["HTTP"]),
     ],
